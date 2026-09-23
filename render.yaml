@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: espace-maman-rosa
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    numInstances: 1
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: MAMAN_ROSA_COOKIE_SECURE
+        value: "1"
+      - key: MAMAN_ROSA_ADMIN_PASSWORD
+        sync: false
+      - key: MAMAN_ROSA_DIRECTEUR_PASSWORD
+        sync: false
+      - key: MAMAN_ROSA_RECEPTION_PASSWORD
+        sync: false
+      - key: MAMAN_ROSA_CAISSE_PASSWORD
+        sync: false
+    disk:
+      name: maman-rosa-persistent
+      mountPath: /persistent
+      sizeGB: 5

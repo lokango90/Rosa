@@ -1,0 +1,12 @@
+ESPACE MAMAN ROSA — PAQUET CLOUD
+
+Vérifications réalisées :
+- compilation Python réussie ;
+- démarrage en mode production réussi ;
+- démarrage refusé lorsque les secrets obligatoires sont absents ;
+- contrôle /health réussi ;
+- connexion Administrateur réussie avec un secret de test ;
+- interface protégée avant authentification ;
+- aucune base de données réelle incluse dans cette archive.
+
+Avant la mise en ligne, suivre DEPLOIEMENT_CLOUD.md et remplacer tous les secrets.

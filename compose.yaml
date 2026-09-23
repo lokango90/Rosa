@@ -1,0 +1,19 @@
+services:
+  maman-rosa:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      APP_ENV: production
+      PORT: 8080
+      MAMAN_ROSA_COOKIE_SECURE: "0"
+      MAMAN_ROSA_ADMIN_PASSWORD: ${MAMAN_ROSA_ADMIN_PASSWORD}
+      MAMAN_ROSA_DIRECTEUR_PASSWORD: ${MAMAN_ROSA_DIRECTEUR_PASSWORD}
+      MAMAN_ROSA_RECEPTION_PASSWORD: ${MAMAN_ROSA_RECEPTION_PASSWORD}
+      MAMAN_ROSA_CAISSE_PASSWORD: ${MAMAN_ROSA_CAISSE_PASSWORD}
+    volumes:
+      - maman_rosa_persistent:/persistent
+
+volumes:
+  maman_rosa_persistent:
