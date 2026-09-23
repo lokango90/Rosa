@@ -461,7 +461,7 @@ class Handler(BaseHTTPRequestHandler):
 .calendar-wrap{overflow:auto;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}.calendar-grid{border-collapse:collapse;min-width:1000px;width:100%;font-size:11px}.calendar-grid th,.calendar-grid td{border:1px solid var(--line);padding:5px;text-align:center;min-width:27px}.calendar-grid th:first-child,.calendar-grid td:first-child{position:sticky;left:0;background:#fff;min-width:105px;text-align:left;font-weight:bold}.calendar-grid td.booked{background:#e3b84f;color:#3c271f;font-weight:bold}.calendar-grid td.arrived{background:#7aa27e;color:#fff}.preview-overlay{position:fixed;inset:0;background:#0009;z-index:9999;display:none;align-items:center;justify-content:center;padding:20px}.preview-overlay.open{display:flex}.preview-card{background:#eee;border-radius:14px;max-width:900px;width:100%;max-height:95vh;overflow:auto;padding:16px}.preview-paper{background:#fff;color:#111;margin:auto;box-shadow:0 4px 25px #0004;padding:24px}.preview-paper.thermal{width:302px}.preview-paper.a4{width:min(100%,760px);min-height:800px}
 </style>"""
         if not session:
-            thermal_style += "<style id=locked-profile>.app{display:none!important}#loginScreen{display:flex!important}</style>"
+            thermal_style += "<style id=locked-profile>.app{display:none!important}#loginScreen{display:grid!important;place-items:center!important}</style>"
         html = html.replace("</head>", thermal_style + "</head>", 1)
         auth_script = """
         <script>
