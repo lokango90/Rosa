@@ -415,8 +415,8 @@ class Handler(BaseHTTPRequestHandler):
             1,
         )
         html = html.replace(
-            "HÔTEL · BAR · RESTAURANT</small>",
-            "HÔTEL · BAR · RESTAURANT</small><small style='padding-top:0;margin-top:9px;line-height:1.45;text-align:center'>Tshingi-Tshingi n°78<br>Q/Camp Luka · C/Ngaliema<br>+243 989 697 763</small>",
+            "<small>HÔTEL · BAR · RESTAURANT</small>",
+            "<small style='text-align:center'>HÔTEL · BAR · RESTAURANT</small><small style='padding-top:0;margin-top:9px;line-height:1.45;text-align:center'>Tshingi-Tshingi n°78<br>Q/Camp Luka · C/Ngaliema<br>+243 989 697 763</small>",
             1,
         )
         inject = (
