@@ -586,17 +586,21 @@ class Handler(BaseHTTPRequestHandler):
           const selector=document.querySelector('#currentUser');
           if(selector){const badge=document.createElement('div');badge.className='user-select';badge.style.cssText='padding:10px 12px;background:rgba(255,255,255,.12);border-radius:8px;font-weight:bold';badge.textContent=window.__SERVER_USER__.name+' · '+window.__SERVER_USER__.role;selector.replaceWith(badge)}
           window.switchUser=()=>{showToast('Déconnectez-vous puis saisissez le mot de passe du profil souhaité')};
-          const logout=document.createElement('button');logout.className='btn ghost';logout.textContent='Changer de profil / Déconnexion';logout.onclick=logoutServer;
-          logout.style.cssText='width:100%;margin-top:10px';document.querySelector('aside').appendChild(logout);
-          const password=document.createElement('button');password.className='btn ghost';password.textContent='Changer mon mot de passe';password.onclick=changeOwnPassword;
-          password.style.cssText='width:100%;margin-top:8px';document.querySelector('aside').appendChild(password);
+          const aside=document.querySelector('aside');
+          const makeAccountAction=(label,handler)=>{const button=document.createElement('button');button.className='btn ghost';button.textContent=label;button.onclick=handler;button.style.cssText='width:100%;margin-top:8px';return button};
+          const logout=makeAccountAction('Changer de profil / Déconnexion',logoutServer);
+          const password=makeAccountAction('Changer mon mot de passe',changeOwnPassword);
           if(['Administrateur','Directeur'].includes(window.__SERVER_USER__.role)){
-            const backup=document.createElement('button');backup.className='btn ghost';backup.textContent='Sauvegarder maintenant';backup.onclick=backupNow;
-            backup.style.cssText='width:100%;margin-top:8px';document.querySelector('aside').appendChild(backup);
-            const resetPassword=document.createElement('button');resetPassword.className='btn ghost';resetPassword.textContent='Récupérer un mot de passe';resetPassword.onclick=resetUserPassword;
-            resetPassword.style.cssText='width:100%;margin-top:8px';document.querySelector('aside').appendChild(resetPassword);
-            const audit=document.createElement('button');audit.className='btn ghost';audit.textContent='Journal d’audit';audit.onclick=showAudit;
-            audit.style.cssText='width:100%;margin-top:8px';document.querySelector('aside').appendChild(audit);
+            const adminToggle=document.createElement('button');adminToggle.className='btn ghost';adminToggle.textContent='⚙ Paramètres administrateur';adminToggle.setAttribute('aria-expanded','false');adminToggle.style.cssText='width:100%;margin-top:10px;font-weight:700';
+            const adminPanel=document.createElement('div');adminPanel.style.cssText='display:none;margin-top:4px;padding:4px 8px 10px;background:rgba(255,255,255,.08);border-radius:10px';
+            adminToggle.onclick=()=>{const open=adminPanel.style.display!=='none';adminPanel.style.display=open?'none':'block';adminToggle.setAttribute('aria-expanded',String(!open))};
+            adminPanel.appendChild(logout);adminPanel.appendChild(password);
+            adminPanel.appendChild(makeAccountAction('Sauvegarder maintenant',backupNow));
+            adminPanel.appendChild(makeAccountAction('Récupérer un mot de passe',resetUserPassword));
+            adminPanel.appendChild(makeAccountAction('Journal d’audit',showAudit));
+            aside.appendChild(adminToggle);aside.appendChild(adminPanel);
+          }else{
+            logout.style.marginTop='10px';aside.appendChild(logout);aside.appendChild(password);
           }
           applyServerRights();createCalendarUI();startIdleLogout();startLiveSync();
         }
