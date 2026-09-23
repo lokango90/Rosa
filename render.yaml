@@ -20,6 +20,8 @@ services:
         sync: false
       - key: MAMAN_ROSA_CAISSE_PASSWORD
         sync: false
+      - key: MAMAN_ROSA_DATA_KEY
+        generateValue: true
     disk:
       name: maman-rosa-persistent
       mountPath: /persistent

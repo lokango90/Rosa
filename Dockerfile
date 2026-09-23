@@ -11,6 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MAMAN_ROSA_COOKIE_SECURE=1
 
 WORKDIR /opt/maman-rosa/server
+RUN pip install --no-cache-dir cryptography==46.0.2
 COPY public/espace-maman-rosa.html /opt/maman-rosa/espace-maman-rosa.html
 COPY public/logo.jpeg /opt/maman-rosa/logo.jpeg
 COPY server/server.py ./server.py
