@@ -11,11 +11,14 @@ import shutil
 import sqlite3
 import threading
 import time
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
+
+from cryptography.fernet import Fernet, InvalidToken
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -25,12 +28,17 @@ HTML_FILE = PUBLIC_DIR / "espace-maman-rosa.html"
 LOGO_FILE = PUBLIC_DIR / "logo.jpeg"
 DATA_DIR = Path(os.environ.get("MAMAN_ROSA_DATA_DIR", APP_DIR / "data")).resolve()
 BACKUP_DIR = Path(os.environ.get("MAMAN_ROSA_BACKUP_DIR", APP_DIR / "backups")).resolve()
+EXTERNAL_BACKUP_DIR = Path(os.environ["MAMAN_ROSA_EXTERNAL_BACKUP_DIR"]).resolve() if os.environ.get("MAMAN_ROSA_EXTERNAL_BACKUP_DIR") else None
 DB_FILE = DATA_DIR / "maman_rosa.db"
 PBKDF2_ROUNDS = 310_000
 SESSION_HOURS = 12
 IDLE_MINUTES = 30
+LOGIN_WINDOW_MINUTES = 15
+LOGIN_MAX_FAILURES = 5
 LOCK = threading.RLock()
 COOKIE_SECURE = os.environ.get("MAMAN_ROSA_COOKIE_SECURE", "0") == "1"
+DATA_SECRET = os.environ.get("MAMAN_ROSA_DATA_KEY", "maman-rosa-local-development-key")
+DATA_CIPHER = Fernet(base64.urlsafe_b64encode(hashlib.sha256(DATA_SECRET.encode("utf-8")).digest()))
 
 ROLE_PERMISSIONS = {
     "Administrateur": ["dashboard", "rooms", "pos", "articles", "stock", "cash", "users", "audit", "backup", "approve"],
@@ -72,6 +80,55 @@ def verify_password(password: str, encoded: str) -> bool:
         return hmac.compare_digest(base64.b64encode(digest).decode(), expected)
     except (ValueError, TypeError):
         return False
+
+
+def encrypt_value(value: object) -> object:
+    if not isinstance(value, str) or not value or value.startswith("enc:v1:"):
+        return value
+    return "enc:v1:" + DATA_CIPHER.encrypt(value.encode("utf-8")).decode("ascii")
+
+
+def decrypt_value(value: object) -> object:
+    if not isinstance(value, str) or not value.startswith("enc:v1:"):
+        return value
+    try:
+        return DATA_CIPHER.decrypt(value[7:].encode("ascii")).decode("utf-8")
+    except (InvalidToken, ValueError):
+        return "[Donnée chiffrée indisponible]"
+
+
+def protect_state(state: dict) -> dict:
+    protected = deepcopy(state)
+    for room in protected.get("rooms", []):
+        for key in ("guest", "guestPhone", "guestId", "guestOrigin", "lastGuest"):
+            if key in room:
+                room[key] = encrypt_value(room[key])
+    for reservation in protected.get("reservations", []):
+        for key in ("guest", "phone", "identity"):
+            if key in reservation:
+                reservation[key] = encrypt_value(reservation[key])
+    for collection in ("history", "outstandingDebts"):
+        for entry in protected.get(collection, []):
+            if "guest" in entry:
+                entry["guest"] = encrypt_value(entry["guest"])
+    return protected
+
+
+def unprotect_state(state: dict) -> dict:
+    visible = deepcopy(state)
+    for room in visible.get("rooms", []):
+        for key in ("guest", "guestPhone", "guestId", "guestOrigin", "lastGuest"):
+            if key in room:
+                room[key] = decrypt_value(room[key])
+    for reservation in visible.get("reservations", []):
+        for key in ("guest", "phone", "identity"):
+            if key in reservation:
+                reservation[key] = decrypt_value(reservation[key])
+    for collection in ("history", "outstandingDebts"):
+        for entry in visible.get(collection, []):
+            if "guest" in entry:
+                entry["guest"] = decrypt_value(entry["guest"])
+    return visible
 
 
 def db() -> sqlite3.Connection:
@@ -169,8 +226,16 @@ def init_db() -> None:
                 decided_at TEXT,
                 consumed_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                ip_address TEXT NOT NULL,
+                succeeded INTEGER NOT NULL DEFAULT 0,
+                attempted_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
             CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log(created_at);
+            CREATE INDEX IF NOT EXISTS idx_login_attempts_lookup ON login_attempts(username,ip_address,attempted_at);
             """
         )
         session_columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
@@ -189,7 +254,7 @@ def init_db() -> None:
             )
         conn.execute(
             "INSERT OR IGNORE INTO app_state(id, state_json, version, updated_at) VALUES(1,?,?,?)",
-            (json.dumps(initial_state(), ensure_ascii=False), 1, utc_now()),
+            (json.dumps(protect_state(initial_state()), ensure_ascii=False), 1, utc_now()),
         )
         conn.execute("PRAGMA optimize")
 
@@ -200,9 +265,21 @@ def backup_database(reason: str = "auto") -> Path:
     target = BACKUP_DIR / f"maman-rosa-{stamp}-{reason}.db"
     with LOCK, db() as source, sqlite3.connect(target) as destination:
         source.backup(destination)
+    with sqlite3.connect(target) as verification:
+        result = verification.execute("PRAGMA integrity_check").fetchone()[0]
+        if result != "ok":
+            target.unlink(missing_ok=True)
+            raise RuntimeError("La vérification de la sauvegarde a échoué")
+    checksum = hashlib.sha256(target.read_bytes()).hexdigest()
+    target.with_suffix(target.suffix + ".sha256").write_text(checksum, encoding="ascii")
+    if EXTERNAL_BACKUP_DIR:
+        EXTERNAL_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(target, EXTERNAL_BACKUP_DIR / target.name)
+        shutil.copy2(target.with_suffix(target.suffix + ".sha256"), EXTERNAL_BACKUP_DIR / (target.name + ".sha256"))
     backups = sorted(BACKUP_DIR.glob("maman-rosa-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in backups[30:]:
         old.unlink(missing_ok=True)
+        old.with_suffix(old.suffix + ".sha256").unlink(missing_ok=True)
     return target
 
 
@@ -338,7 +415,7 @@ class Handler(BaseHTTPRequestHandler):
             if session:
                 with db() as conn:
                     row = conn.execute("SELECT state_json, version, updated_at FROM app_state WHERE id=1").fetchone()
-                self.json_response(200, {"ok": True, "state": json.loads(row["state_json"]), "version": row["version"], "updated_at": row["updated_at"]})
+                self.json_response(200, {"ok": True, "state": unprotect_state(json.loads(row["state_json"])), "version": row["version"], "updated_at": row["updated_at"]})
         elif path == "/api/me":
             session = self.require_session()
             if session:
@@ -354,6 +431,10 @@ class Handler(BaseHTTPRequestHandler):
             self.get_audit()
         elif path == "/api/users":
             self.get_users()
+        elif path == "/api/backups":
+            self.list_backups()
+        elif path == "/api/backup/download":
+            self.download_backup()
         else:
             self.send_error(404)
 
@@ -368,6 +449,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.save_state()
             elif path == "/api/backup":
                 self.create_backup()
+            elif path == "/api/backup/test":
+                self.test_backup()
+            elif path == "/api/backup/restore":
+                self.restore_backup()
             elif path == "/api/password/change":
                 self.change_password()
             elif path == "/api/password/reset":
@@ -401,7 +486,7 @@ class Handler(BaseHTTPRequestHandler):
         if session:
             with db() as conn:
                 state_row = conn.execute("SELECT state_json,version FROM app_state WHERE id=1").fetchone()
-                state = json.loads(state_row["state_json"])
+                state = unprotect_state(json.loads(state_row["state_json"]))
                 state_version = state_row["version"]
         html = HTML_FILE.read_text(encoding="utf-8")
         address_html = "Tshingi-Tshingi n°78, Q/Camp Luka, C/Ngaliema<br>Tél. : +243 989 697 763"
@@ -481,6 +566,10 @@ class Handler(BaseHTTPRequestHandler):
           const data=await res.json();
           showToast(data.ok?'Sauvegarde créée : '+data.file:(data.error||'Sauvegarde impossible'));
         }
+        async function testBackup(name){const res=await fetch('/api/backup/test',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.__CSRF__},body:JSON.stringify({name})});const data=await res.json();alert(data.ok?'Sauvegarde vérifiée : intégrité OK':(data.error||'Test impossible'))}
+        function downloadBackup(name){location.href='/api/backup/download?name='+encodeURIComponent(name)}
+        async function restoreBackup(name){if(window.__SERVER_USER__.role!=='Administrateur')return showToast('Restauration réservée à l’administrateur');const confirmation=prompt('Cette opération remplacera les données actuelles. Tapez RESTAURER pour confirmer.');if(confirmation!=='RESTAURER')return;const res=await fetch('/api/backup/restore',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.__CSRF__},body:JSON.stringify({name,confirmation})});const data=await res.json();if(data.ok){alert(data.message);location.reload()}else showToast(data.error||'Restauration impossible')}
+        async function manageBackups(){const popup=window.open('','Sauvegardes','width=820,height=650');if(!popup)return showToast('Autorisez les fenêtres pour gérer les sauvegardes');popup.document.write('<p style="font:16px sans-serif;padding:20px">Chargement…</p>');const data=await (await fetch('/api/backups')).json();if(!data.ok){popup.close();return showToast(data.error)}const rows=(data.backups||[]).map(b=>`<tr><td>${b.name}</td><td>${new Date(b.created_at).toLocaleString('fr-FR')}</td><td>${Math.ceil(b.size/1024)} Ko</td><td><button onclick="opener.downloadBackup('${b.name}')">Télécharger</button> <button onclick="opener.testBackup('${b.name}')">Tester</button> ${window.__SERVER_USER__.role==='Administrateur'?`<button onclick="opener.restoreBackup('${b.name}')">Restaurer</button>`:''}</td></tr>`).join('');popup.document.open();popup.document.write(`<title>Sauvegardes</title><style>body{font:14px sans-serif;padding:22px}table{width:100%;border-collapse:collapse}td,th{padding:9px;border-bottom:1px solid #ddd;text-align:left}button{padding:6px 9px;margin:2px}</style><h1>Sauvegardes vérifiées</h1><p>Les sauvegardes automatiques sont créées chaque jour et contrôlées par SQLite.</p><table><tr><th>Fichier</th><th>Date</th><th>Taille</th><th>Actions</th></tr>${rows}</table>`);popup.document.close()}
         async function resetUserPassword(){
           const username=prompt('Nom d’utilisateur à réinitialiser');if(!username)return;
           const list=await (await fetch('/api/users')).json();const user=(list.users||[]).find(u=>u.username.toLowerCase()===username.toLowerCase());
@@ -596,6 +685,7 @@ class Handler(BaseHTTPRequestHandler):
             adminToggle.onclick=()=>{const open=adminPanel.style.display!=='none';adminPanel.style.display=open?'none':'block';adminToggle.setAttribute('aria-expanded',String(!open))};
             adminPanel.appendChild(logout);adminPanel.appendChild(password);
             adminPanel.appendChild(makeAccountAction('Sauvegarder maintenant',backupNow));
+            adminPanel.appendChild(makeAccountAction('Gérer les sauvegardes',manageBackups));
             adminPanel.appendChild(makeAccountAction('Récupérer un mot de passe',resetUserPassword));
             adminPanel.appendChild(makeAccountAction('Journal d’audit',showAudit));
             aside.appendChild(adminToggle);aside.appendChild(adminPanel);
@@ -622,12 +712,26 @@ class Handler(BaseHTTPRequestHandler):
         payload = self.read_json()
         username = str(payload.get("username", ""))[:80]
         password = str(payload.get("password", ""))[:256]
+        ip_address = self.client_address[0]
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=LOGIN_WINDOW_MINUTES)).isoformat()
         with db() as conn:
+            failures = conn.execute(
+                "SELECT COUNT(*) FROM login_attempts WHERE username=? COLLATE NOCASE AND ip_address=? AND succeeded=0 AND attempted_at>=?",
+                (username, ip_address, cutoff),
+            ).fetchone()[0]
+            if failures >= LOGIN_MAX_FAILURES:
+                conn.execute("INSERT INTO audit_log(action,details,created_at) VALUES(?,?,?)", ("login_blocked", json.dumps({"username": username, "ip": ip_address}), utc_now()))
+                self.json_response(429, {"ok": False, "error": "Trop de tentatives. Réessayez dans 15 minutes."})
+                return
             user = conn.execute("SELECT * FROM users WHERE username=? COLLATE NOCASE AND active=1", (username,)).fetchone()
             if not user or not verify_password(password, user["password_hash"]):
+                conn.execute("INSERT INTO login_attempts(username,ip_address,succeeded,attempted_at) VALUES(?,?,0,?)", (username, ip_address, utc_now()))
+                conn.execute("INSERT INTO audit_log(user_id,action,details,created_at) VALUES(?,?,?,?)", (user["id"] if user else None, "login_failed", json.dumps({"username": username, "ip": ip_address}), utc_now()))
                 time.sleep(0.35)
                 self.json_response(401, {"ok": False, "error": "Identifiants incorrects"})
                 return
+            conn.execute("DELETE FROM login_attempts WHERE (username=? COLLATE NOCASE AND ip_address=?) OR attempted_at<?", (username, ip_address, cutoff))
+            conn.execute("INSERT INTO login_attempts(username,ip_address,succeeded,attempted_at) VALUES(?,?,1,?)", (username, ip_address, utc_now()))
             token = secrets.token_urlsafe(32)
             csrf = secrets.token_urlsafe(24)
             expires = (datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS)).isoformat()
@@ -637,7 +741,7 @@ class Handler(BaseHTTPRequestHandler):
                 (hashlib.sha256(token.encode()).hexdigest(), user["id"], csrf, expires, utc_now(), utc_now()),
             )
             conn.execute("UPDATE users SET last_login_at=? WHERE id=?", (utc_now(), user["id"]))
-            conn.execute("INSERT INTO audit_log(user_id,action,created_at) VALUES(?,?,?)", (user["id"], "login", utc_now()))
+            conn.execute("INSERT INTO audit_log(user_id,action,details,created_at) VALUES(?,?,?,?)", (user["id"], "login", json.dumps({"ip": ip_address}), utc_now()))
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         secure = "; Secure" if COOKIE_SECURE else ""
@@ -670,7 +774,7 @@ class Handler(BaseHTTPRequestHandler):
         state = payload.get("state")
         if not isinstance(state, dict):
             raise ValueError("État invalide")
-        encoded = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+        encoded = json.dumps(protect_state(state), ensure_ascii=False, separators=(",", ":"))
         with LOCK, db() as conn:
             current_row = conn.execute("SELECT state_json,version FROM app_state WHERE id=1").fetchone()
             current = current_row["version"]
@@ -678,7 +782,7 @@ class Handler(BaseHTTPRequestHandler):
             if expected_version is not None and int(expected_version) != current:
                 self.json_response(409, {"ok": False, "error": "Données modifiées sur un autre appareil", "version": current})
                 return
-            old_state = json.loads(current_row["state_json"])
+            old_state = unprotect_state(json.loads(current_row["state_json"]))
             if session["role"] not in ("Administrateur", "Directeur"):
                 allowed_keys = ROLE_STATE_KEYS.get(session["role"], set())
                 forbidden = [key for key in set(old_state) | set(state) if old_state.get(key) != state.get(key) and key not in allowed_keys]
@@ -819,6 +923,88 @@ class Handler(BaseHTTPRequestHandler):
             conn.execute("INSERT INTO audit_log(user_id,action,details,created_at) VALUES(?,?,?,?)", (session["user_id"], "backup", target.name, utc_now()))
         self.json_response(200, {"ok": True, "file": target.name})
 
+    def list_backups(self) -> None:
+        session = self.require_session()
+        if not session:
+            return
+        if session["role"] not in ("Administrateur", "Directeur"):
+            self.json_response(403, {"ok": False, "error": "Accès administrateur requis"})
+            return
+        files = sorted(BACKUP_DIR.glob("maman-rosa-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+        self.json_response(200, {"ok": True, "backups": [{"name": p.name, "size": p.stat().st_size, "created_at": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat()} for p in files]})
+
+    def backup_from_query(self) -> Path | None:
+        name = parse_qs(urlparse(self.path).query).get("name", [""])[0]
+        if not name or Path(name).name != name:
+            return None
+        candidate = BACKUP_DIR / name
+        return candidate if candidate.is_file() and candidate.suffix == ".db" else None
+
+    def download_backup(self) -> None:
+        session = self.require_session()
+        if not session:
+            return
+        if session["role"] not in ("Administrateur", "Directeur"):
+            self.json_response(403, {"ok": False, "error": "Accès administrateur requis"})
+            return
+        target = self.backup_from_query()
+        if not target:
+            self.json_response(404, {"ok": False, "error": "Sauvegarde introuvable"})
+            return
+        body = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/vnd.sqlite3")
+        self.send_header("Content-Disposition", f'attachment; filename="{target.name}"')
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def test_backup(self) -> None:
+        session = self.require_session(csrf=True)
+        if not session:
+            return
+        if session["role"] not in ("Administrateur", "Directeur"):
+            self.json_response(403, {"ok": False, "error": "Accès administrateur requis"})
+            return
+        payload = self.read_json()
+        name = str(payload.get("name", ""))
+        target = BACKUP_DIR / name if name and Path(name).name == name else None
+        if not target or not target.is_file():
+            self.json_response(404, {"ok": False, "error": "Sauvegarde introuvable"})
+            return
+        with sqlite3.connect(target) as verification:
+            result = verification.execute("PRAGMA integrity_check").fetchone()[0]
+            verification.execute("SELECT state_json FROM app_state WHERE id=1").fetchone()
+        with db() as conn:
+            conn.execute("INSERT INTO audit_log(user_id,action,details,created_at) VALUES(?,?,?,?)", (session["user_id"], "backup_tested", json.dumps({"file": name, "result": result}), utc_now()))
+        self.json_response(200, {"ok": result == "ok", "result": result})
+
+    def restore_backup(self) -> None:
+        session = self.require_session(csrf=True)
+        if not session:
+            return
+        if session["role"] != "Administrateur":
+            self.json_response(403, {"ok": False, "error": "Restauration réservée à l’administrateur"})
+            return
+        payload = self.read_json()
+        name = str(payload.get("name", ""))
+        confirmation = str(payload.get("confirmation", ""))
+        target = BACKUP_DIR / name if name and Path(name).name == name else None
+        if confirmation != "RESTAURER" or not target or not target.is_file():
+            self.json_response(400, {"ok": False, "error": "Sauvegarde ou confirmation invalide"})
+            return
+        with sqlite3.connect(target) as verification:
+            if verification.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                self.json_response(400, {"ok": False, "error": "Sauvegarde corrompue"})
+                return
+        backup_database("avant-restauration")
+        with LOCK, sqlite3.connect(target) as source, db() as destination:
+            source.backup(destination)
+            destination.execute("DELETE FROM sessions")
+            destination.execute("INSERT INTO audit_log(user_id,action,details,created_at) VALUES(NULL,?,?,?)", ("database_restored", json.dumps({"file": name, "by": session["username"]}), utc_now()))
+        self.json_response(200, {"ok": True, "message": "Base restaurée. Reconnexion nécessaire."})
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Serveur Espace Maman Rosa")
@@ -826,7 +1012,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8766")))
     args = parser.parse_args()
     if os.environ.get("APP_ENV") == "production":
-        required = ["MAMAN_ROSA_ADMIN_PASSWORD", "MAMAN_ROSA_DIRECTEUR_PASSWORD", "MAMAN_ROSA_RECEPTION_PASSWORD", "MAMAN_ROSA_CAISSE_PASSWORD"]
+        required = ["MAMAN_ROSA_ADMIN_PASSWORD", "MAMAN_ROSA_DIRECTEUR_PASSWORD", "MAMAN_ROSA_RECEPTION_PASSWORD", "MAMAN_ROSA_CAISSE_PASSWORD", "MAMAN_ROSA_DATA_KEY"]
         missing = [name for name in required if len(os.environ.get(name, "")) < 12]
         if missing:
             raise RuntimeError("Variables secrètes manquantes ou trop courtes: " + ", ".join(missing))
