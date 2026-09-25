@@ -544,6 +544,9 @@ class Handler(BaseHTTPRequestHandler):
   .print-total { font-size: 15px !important; }
 }
 .calendar-wrap{overflow:auto;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}.calendar-grid{border-collapse:collapse;min-width:1000px;width:100%;font-size:11px}.calendar-grid th,.calendar-grid td{border:1px solid var(--line);padding:5px;text-align:center;min-width:27px}.calendar-grid th:first-child,.calendar-grid td:first-child{position:sticky;left:0;background:#fff;min-width:105px;text-align:left;font-weight:bold}.calendar-grid td.booked{background:#e3b84f;color:#3c271f;font-weight:bold}.calendar-grid td.arrived{background:#7aa27e;color:#fff}.preview-overlay{position:fixed;inset:0;background:#0009;z-index:9999;display:none;align-items:center;justify-content:center;padding:20px}.preview-overlay.open{display:flex}.preview-card{background:#eee;border-radius:14px;max-width:900px;width:100%;max-height:95vh;overflow:auto;padding:16px}.preview-paper{background:#fff;color:#111;margin:auto;box-shadow:0 4px 25px #0004;padding:24px}.preview-paper.thermal{width:302px}.preview-paper.a4{width:min(100%,760px);min-height:800px}
+.mobile-menu-toggle{display:none;width:100%;border:1px solid #ffffff45;background:#e4b440;color:#3e241f;border-radius:10px;padding:11px 14px;font-weight:800;font-size:15px;margin-top:9px;cursor:pointer}
+@media(max-width:850px){body{font-size:14px}.app{display:block!important}aside{position:sticky;top:0;z-index:80;padding:9px 12px;max-height:100vh;overflow-y:auto;box-shadow:0 5px 18px #2d171548}.brand{min-height:108px;background-size:92px auto;background-position:center 4px;border-radius:11px}.brand small{padding-top:91px;font-size:7px;letter-spacing:1.2px;margin-top:0}.brand small+small{padding-top:0!important;margin-top:5px!important;font-size:7px}.mobile-menu-toggle{display:block}.user-select{margin-top:9px}.nav{display:grid;grid-template-columns:1fr 1fr;margin-top:9px;gap:6px}.nav button,.btn{min-height:44px;font-size:14px}.nav button{text-align:center;padding:9px}.mobile-collapsed .nav,.mobile-collapsed .user-select,.mobile-collapsed .admin-settings-toggle,.mobile-collapsed .admin-settings-panel,.mobile-collapsed .account-action{display:none!important}.mobile-collapsed .brand{min-height:72px;background-size:62px auto;background-position:center 3px}.mobile-collapsed .brand small{display:none}main{padding:14px 10px;max-width:100%;overflow-x:hidden}.top{align-items:flex-start;gap:8px;flex-wrap:wrap}.top h1{font-size:24px;margin-bottom:4px}.kpis{grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.kpi,.panel{padding:13px;border-radius:11px}.kpi b{font-size:21px}.rooms,.products{grid-template-columns:1fr 1fr;gap:8px}.room,.product{min-height:96px;padding:11px}.grid,.pos,.split{grid-template-columns:1fr}.tables{grid-template-columns:repeat(3,1fr);gap:9px}.toolbar{align-items:flex-start;flex-wrap:wrap}.article-row{grid-template-columns:1fr auto;gap:8px}.article-row>div:last-child{grid-column:1/-1}.article-row .mini-input{width:85px}.dialog,.dialog.wide{width:100%;max-height:96vh;padding:16px;padding-bottom:88px;border-radius:12px}.dialog.wide>.actions{bottom:2vh;width:calc(100% - 28px);padding:9px;grid-template-columns:1fr 1fr}.preview-overlay{padding:6px}.preview-card{padding:8px;border-radius:10px}.preview-paper.a4{min-width:700px}.calendar-wrap{padding:6px}.toast{left:12px;right:12px;bottom:12px;text-align:center}.cash{font-size:28px}table{min-width:560px}.panel{overflow-x:auto}}
+@media(max-width:480px){.kpis,.rooms,.products{grid-template-columns:1fr}.tables{grid-template-columns:1fr 1fr}.top h1{font-size:21px}.nav{grid-template-columns:1fr}.dialog.wide>.actions{grid-template-columns:1fr 1fr}.preview-paper.thermal{width:100%}}
 </style>"""
         if not session:
             thermal_style += "<style id=locked-profile>.app{display:none!important}#loginScreen{display:grid!important;place-items:center!important}</style>"
@@ -676,12 +679,17 @@ class Handler(BaseHTTPRequestHandler):
           if(selector){const badge=document.createElement('div');badge.className='user-select';badge.style.cssText='padding:10px 12px;background:rgba(255,255,255,.12);border-radius:8px;font-weight:bold';badge.textContent=window.__SERVER_USER__.name+' · '+window.__SERVER_USER__.role;selector.replaceWith(badge)}
           window.switchUser=()=>{showToast('Déconnectez-vous puis saisissez le mot de passe du profil souhaité')};
           const aside=document.querySelector('aside');
+          const mobileToggle=document.createElement('button');mobileToggle.className='mobile-menu-toggle';mobileToggle.textContent='☰ Ouvrir le menu';mobileToggle.setAttribute('aria-expanded','false');aside.insertBefore(mobileToggle,aside.children[1]||null);
+          const setMobileMenu=open=>{aside.classList.toggle('mobile-collapsed',!open);mobileToggle.textContent=open?'✕ Fermer le menu':'☰ Ouvrir le menu';mobileToggle.setAttribute('aria-expanded',String(open))};
+          mobileToggle.onclick=()=>setMobileMenu(aside.classList.contains('mobile-collapsed'));
+          if(matchMedia('(max-width:850px)').matches)setMobileMenu(false);
+          aside.querySelector('.nav').addEventListener('click',event=>{if(event.target.closest('button')&&matchMedia('(max-width:850px)').matches)setMobileMenu(false)});
           const makeAccountAction=(label,handler)=>{const button=document.createElement('button');button.className='btn ghost';button.textContent=label;button.onclick=handler;button.style.cssText='width:100%;margin-top:8px';return button};
           const logout=makeAccountAction('Changer de profil / Déconnexion',logoutServer);
           const password=makeAccountAction('Changer mon mot de passe',changeOwnPassword);
           if(['Administrateur','Directeur'].includes(window.__SERVER_USER__.role)){
-            const adminToggle=document.createElement('button');adminToggle.className='btn ghost';adminToggle.textContent='⚙ Paramètres administrateur';adminToggle.setAttribute('aria-expanded','false');adminToggle.style.cssText='width:100%;margin-top:10px;font-weight:700';
-            const adminPanel=document.createElement('div');adminPanel.style.cssText='display:none;margin-top:4px;padding:4px 8px 10px;background:rgba(255,255,255,.08);border-radius:10px';
+            const adminToggle=document.createElement('button');adminToggle.className='btn ghost admin-settings-toggle';adminToggle.textContent='⚙ Paramètres administrateur';adminToggle.setAttribute('aria-expanded','false');adminToggle.style.cssText='width:100%;margin-top:10px;font-weight:700';
+            const adminPanel=document.createElement('div');adminPanel.className='admin-settings-panel';adminPanel.style.cssText='display:none;margin-top:4px;padding:4px 8px 10px;background:rgba(255,255,255,.08);border-radius:10px';
             adminToggle.onclick=()=>{const open=adminPanel.style.display!=='none';adminPanel.style.display=open?'none':'block';adminToggle.setAttribute('aria-expanded',String(!open))};
             adminPanel.appendChild(logout);adminPanel.appendChild(password);
             adminPanel.appendChild(makeAccountAction('Sauvegarder maintenant',backupNow));
@@ -690,7 +698,7 @@ class Handler(BaseHTTPRequestHandler):
             adminPanel.appendChild(makeAccountAction('Journal d’audit',showAudit));
             aside.appendChild(adminToggle);aside.appendChild(adminPanel);
           }else{
-            logout.style.marginTop='10px';aside.appendChild(logout);aside.appendChild(password);
+            logout.classList.add('account-action');password.classList.add('account-action');logout.style.marginTop='10px';aside.appendChild(logout);aside.appendChild(password);
           }
           applyServerRights();createCalendarUI();startIdleLogout();startLiveSync();
         }
