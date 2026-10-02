@@ -16,6 +16,8 @@ COPY public/espace-maman-rosa.html /opt/maman-rosa/espace-maman-rosa.html
 COPY public/logo.jpeg /opt/maman-rosa/logo.jpeg
 COPY public/manifest.webmanifest /opt/maman-rosa/manifest.webmanifest
 COPY public/service-worker.js /opt/maman-rosa/service-worker.js
+COPY public/icon-192.png /opt/maman-rosa/icon-192.png
+COPY public/icon-512.png /opt/maman-rosa/icon-512.png
 COPY server/server.py ./server.py
 
 RUN useradd --system --uid 10001 --create-home mamanrosa \
