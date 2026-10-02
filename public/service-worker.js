@@ -1,5 +1,5 @@
-const CACHE_NAME = "maman-rosa-shell-v1";
-const STATIC_FILES = ["/manifest.webmanifest", "/logo.jpeg"];
+const CACHE_NAME = "maman-rosa-shell-v2";
+const STATIC_FILES = ["/manifest.webmanifest", "/logo.jpeg", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(STATIC_FILES)));
