@@ -467,6 +467,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.test_backup()
             elif path == "/api/backup/restore":
                 self.restore_backup()
+            elif path == "/api/reset-demo":
+                self.reset_demo_data()
             elif path == "/api/password/change":
                 self.change_password()
             elif path == "/api/password/reset":
@@ -584,6 +586,14 @@ class Handler(BaseHTTPRequestHandler):
           const res=await fetch('/api/backup',{method:'POST',headers:{'X-CSRF-Token':window.__CSRF__}});
           const data=await res.json();
           showToast(data.ok?'Sauvegarde créée : '+data.file:(data.error||'Sauvegarde impossible'));
+        }
+        async function resetDemoData(){
+          if(window.__SERVER_USER__.role!=='Administrateur')return showToast('Action réservée à l’administrateur');
+          const confirmation=prompt('Une sauvegarde sera créée. Tapez REINITIALISER pour effacer les opérations d’essai.');
+          if(confirmation!=='REINITIALISER')return;
+          const res=await fetch('/api/reset-demo',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.__CSRF__},body:JSON.stringify({confirmation})});
+          const data=await res.json();
+          if(data.ok){alert('Réinitialisation terminée. Sauvegarde : '+data.backup);location.reload()}else showToast(data.error||'Réinitialisation impossible');
         }
         async function testBackup(name){const res=await fetch('/api/backup/test',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.__CSRF__},body:JSON.stringify({name})});const data=await res.json();alert(data.ok?'Sauvegarde vérifiée : intégrité OK':(data.error||'Test impossible'))}
         function downloadBackup(name){location.href='/api/backup/download?name='+encodeURIComponent(name)}
@@ -722,6 +732,7 @@ class Handler(BaseHTTPRequestHandler):
             adminPanel.appendChild(makeAccountAction('Gérer les sauvegardes',manageBackups));
             adminPanel.appendChild(makeAccountAction('Récupérer un mot de passe',resetUserPassword));
             adminPanel.appendChild(makeAccountAction('Journal d’audit',showAudit));
+            if(window.__SERVER_USER__.role==='Administrateur')adminPanel.appendChild(makeAccountAction('Réinitialiser les données d’essai',resetDemoData));
             aside.appendChild(adminToggle);aside.appendChild(adminPanel);
           }else{
             logout.classList.add('account-action');password.classList.add('account-action');logout.style.marginTop='10px';aside.appendChild(logout);aside.appendChild(password);
@@ -956,6 +967,33 @@ class Handler(BaseHTTPRequestHandler):
         with db() as conn:
             conn.execute("INSERT INTO audit_log(user_id,action,details,created_at) VALUES(?,?,?,?)", (session["user_id"], "backup", target.name, utc_now()))
         self.json_response(200, {"ok": True, "file": target.name})
+
+    def reset_demo_data(self) -> None:
+        session = self.require_session(csrf=True)
+        if not session:
+            return
+        if session["role"] != "Administrateur":
+            self.json_response(403, {"ok": False, "error": "Réinitialisation réservée à l’administrateur"})
+            return
+        payload = self.read_json()
+        if payload.get("confirmation") != "REINITIALISER":
+            self.json_response(400, {"ok": False, "error": "Confirmation incorrecte"})
+            return
+        backup = backup_database("avant-reset-essais")
+        with LOCK, db() as conn:
+            row = conn.execute("SELECT state_json,version FROM app_state WHERE id=1").fetchone()
+            state = unprotect_state(json.loads(row["state_json"]))
+            room_keys = ("id", "category", "nightRate", "passageRate", "priceNight", "pricePassage")
+            state["rooms"] = [{**{key: room[key] for key in room_keys if key in room}, "id": room.get("id", index + 1), "status": "free"} for index, room in enumerate(state.get("rooms", []))]
+            if not state["rooms"]:
+                state["rooms"] = [{"id": i, "status": "free"} for i in range(1, 13)]
+            state["tables"] = [False] * max(10, len(state.get("tables", [])))
+            reset_values = {"sales": 0, "moves": [], "selected": 1, "cart": [], "posSales": 0, "expenses": 0, "openingCash": 0, "closures": [], "stockMoves": [], "history": [], "alerted": {}, "reservations": [], "documentCounters": {"invoice": 0, "ticket": 0}, "outstandingDebts": [], "analyticEntries": []}
+            state.update(reset_values)
+            state.pop("lastReceipt", None)
+            conn.execute("UPDATE app_state SET state_json=?,version=?,updated_at=?,updated_by=? WHERE id=1", (json.dumps(protect_state(state), ensure_ascii=False, separators=(",", ":")), row["version"] + 1, utc_now(), session["user_id"]))
+            conn.execute("INSERT INTO audit_log(user_id,action,details,created_at) VALUES(?,?,?,?)", (session["user_id"], "demo_data_reset", json.dumps({"backup": backup.name}, ensure_ascii=False), utc_now()))
+        self.json_response(200, {"ok": True, "backup": backup.name, "message": "Données d’essai réinitialisées"})
 
     def list_backups(self) -> None:
         session = self.require_session()
