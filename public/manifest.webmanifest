@@ -1,0 +1,21 @@
+{
+  "name": "Espace Maman Rosa",
+  "short_name": "Maman Rosa",
+  "description": "Gestion centralisée de l'hôtel, du bar et du restaurant Espace Maman Rosa",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#6b4037",
+  "theme_color": "#6b4037",
+  "lang": "fr",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    {
+      "src": "/logo.jpeg",
+      "sizes": "1024x1024",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ]
+}
