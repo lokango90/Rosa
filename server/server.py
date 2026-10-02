@@ -28,6 +28,8 @@ HTML_FILE = PUBLIC_DIR / "espace-maman-rosa.html"
 LOGO_FILE = PUBLIC_DIR / "logo.jpeg"
 MANIFEST_FILE = PUBLIC_DIR / "manifest.webmanifest"
 SERVICE_WORKER_FILE = PUBLIC_DIR / "service-worker.js"
+ICON_192_FILE = PUBLIC_DIR / "icon-192.png"
+ICON_512_FILE = PUBLIC_DIR / "icon-512.png"
 DATA_DIR = Path(os.environ.get("MAMAN_ROSA_DATA_DIR", APP_DIR / "data")).resolve()
 BACKUP_DIR = Path(os.environ.get("MAMAN_ROSA_BACKUP_DIR", APP_DIR / "backups")).resolve()
 EXTERNAL_BACKUP_DIR = Path(os.environ["MAMAN_ROSA_EXTERNAL_BACKUP_DIR"]).resolve() if os.environ.get("MAMAN_ROSA_EXTERNAL_BACKUP_DIR") else None
@@ -418,6 +420,10 @@ class Handler(BaseHTTPRequestHandler):
             self.serve_file(MANIFEST_FILE, "application/manifest+json; charset=utf-8")
         elif path == "/service-worker.js":
             self.serve_file(SERVICE_WORKER_FILE, "application/javascript; charset=utf-8")
+        elif path == "/icon-192.png":
+            self.serve_file(ICON_192_FILE, "image/png")
+        elif path == "/icon-512.png":
+            self.serve_file(ICON_512_FILE, "image/png")
         elif path == "/api/state":
             session = self.require_session()
             if session:
@@ -497,7 +503,7 @@ class Handler(BaseHTTPRequestHandler):
                 state = unprotect_state(json.loads(state_row["state_json"]))
                 state_version = state_row["version"]
         html = HTML_FILE.read_text(encoding="utf-8")
-        pwa_head = '<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/logo.jpeg" type="image/jpeg"><link rel="apple-touch-icon" href="/logo.jpeg"><meta name="theme-color" content="#6b4037"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Maman Rosa">'
+        pwa_head = '<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon-192.png" type="image/png"><link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png"><meta name="theme-color" content="#6b4037"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Maman Rosa">'
         html = html.replace("</head>", pwa_head + "</head>", 1)
         address_html = "Tshingi-Tshingi n°78, Q/Camp Luka, C/Ngaliema<br>Tél. : +243 989 697 763"
         html = html.replace(
