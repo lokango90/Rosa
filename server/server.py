@@ -26,6 +26,8 @@ OUTPUTS_DIR = APP_DIR.parent
 PUBLIC_DIR = Path(os.environ.get("MAMAN_ROSA_PUBLIC_DIR", OUTPUTS_DIR)).resolve()
 HTML_FILE = PUBLIC_DIR / "espace-maman-rosa.html"
 LOGO_FILE = PUBLIC_DIR / "logo.jpeg"
+MANIFEST_FILE = PUBLIC_DIR / "manifest.webmanifest"
+SERVICE_WORKER_FILE = PUBLIC_DIR / "service-worker.js"
 DATA_DIR = Path(os.environ.get("MAMAN_ROSA_DATA_DIR", APP_DIR / "data")).resolve()
 BACKUP_DIR = Path(os.environ.get("MAMAN_ROSA_BACKUP_DIR", APP_DIR / "backups")).resolve()
 EXTERNAL_BACKUP_DIR = Path(os.environ["MAMAN_ROSA_EXTERNAL_BACKUP_DIR"]).resolve() if os.environ.get("MAMAN_ROSA_EXTERNAL_BACKUP_DIR") else None
@@ -41,8 +43,8 @@ DATA_SECRET = os.environ.get("MAMAN_ROSA_DATA_KEY", "maman-rosa-local-developmen
 DATA_CIPHER = Fernet(base64.urlsafe_b64encode(hashlib.sha256(DATA_SECRET.encode("utf-8")).digest()))
 
 ROLE_PERMISSIONS = {
-    "Administrateur": ["dashboard", "rooms", "pos", "articles", "stock", "cash", "users", "audit", "backup", "approve"],
-    "Directeur": ["dashboard", "rooms", "pos", "articles", "stock", "cash", "users", "audit", "backup", "approve"],
+    "Administrateur": ["dashboard", "rooms", "pos", "articles", "stock", "cash", "analytics", "users", "audit", "backup", "approve"],
+    "Directeur": ["dashboard", "rooms", "pos", "articles", "stock", "cash", "analytics", "users", "audit", "backup", "approve"],
     "Réceptionniste": ["dashboard", "rooms", "calendar"],
     "Caissier": ["dashboard", "pos", "cash"],
     "Serveur": ["pos"],
@@ -52,10 +54,10 @@ ROLE_PERMISSIONS = {
 }
 
 ROLE_STATE_KEYS = {
-    "Réceptionniste": {"rooms", "selected", "alerted", "history", "exchangeRate", "reservations", "documentCounters"},
-    "Caissier": {"cart", "sales", "posSales", "moves", "closures", "openingCash", "expenses", "products", "stockMoves", "lastReceipt", "tables", "history", "exchangeRate", "documentCounters"},
-    "Serveur": {"cart", "posSales", "moves", "products", "stockMoves", "lastReceipt", "tables", "rooms", "history"},
-    "Barman": {"cart", "posSales", "moves", "products", "stockMoves", "lastReceipt", "tables", "history"},
+    "Réceptionniste": {"rooms", "selected", "alerted", "history", "exchangeRate", "reservations", "documentCounters", "analyticEntries"},
+    "Caissier": {"cart", "sales", "posSales", "moves", "closures", "openingCash", "expenses", "products", "stockMoves", "lastReceipt", "tables", "history", "exchangeRate", "documentCounters", "analyticEntries"},
+    "Serveur": {"cart", "posSales", "moves", "products", "stockMoves", "lastReceipt", "tables", "rooms", "history", "analyticEntries"},
+    "Barman": {"cart", "posSales", "moves", "products", "stockMoves", "lastReceipt", "tables", "history", "analyticEntries"},
     "Cuisinier": {"tables", "history"},
     "Responsable du stock": {"products", "stockMoves", "history"},
 }
@@ -174,6 +176,8 @@ def initial_state() -> dict:
         "reservations": [],
         "documentCounters": {"invoice": 0, "ticket": 0},
         "outstandingDebts": [],
+        "analyticEntries": [],
+        "analyticCenters": ["Hôtel", "Bar", "Restaurant", "Cuisine", "Administration"],
     }
 
 
@@ -410,6 +414,10 @@ class Handler(BaseHTTPRequestHandler):
             self.serve_app()
         elif path == "/logo.jpeg":
             self.serve_file(LOGO_FILE, "image/jpeg")
+        elif path == "/manifest.webmanifest":
+            self.serve_file(MANIFEST_FILE, "application/manifest+json; charset=utf-8")
+        elif path == "/service-worker.js":
+            self.serve_file(SERVICE_WORKER_FILE, "application/javascript; charset=utf-8")
         elif path == "/api/state":
             session = self.require_session()
             if session:
@@ -489,6 +497,8 @@ class Handler(BaseHTTPRequestHandler):
                 state = unprotect_state(json.loads(state_row["state_json"]))
                 state_version = state_row["version"]
         html = HTML_FILE.read_text(encoding="utf-8")
+        pwa_head = '<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/logo.jpeg" type="image/jpeg"><link rel="apple-touch-icon" href="/logo.jpeg"><meta name="theme-color" content="#6b4037"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Maman Rosa">'
+        html = html.replace("</head>", pwa_head + "</head>", 1)
         address_html = "Tshingi-Tshingi n°78, Q/Camp Luka, C/Ngaliema<br>Tél. : +243 989 697 763"
         html = html.replace(
             "Hôtel · Bar · Restaurant · RDC</p>",
@@ -673,6 +683,16 @@ class Handler(BaseHTTPRequestHandler):
           }catch(e){}
         }
         function startLiveSync(){setInterval(syncFromServer,4000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncFromServer()})}
+        function setupPwaInstall(){
+          if('serviceWorker' in navigator)navigator.serviceWorker.register('/service-worker.js').catch(()=>{});
+          let installEvent=null;const installed=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+          const button=document.createElement('button');button.className='btn ghost account-action';button.style.cssText='width:100%;margin-top:10px;font-weight:700';button.textContent=installed?'✓ Application installée':'⬇ Installer l’application';button.disabled=installed;
+          window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();installEvent=event;button.disabled=false;button.textContent='⬇ Installer l’application'});
+          window.addEventListener('appinstalled',()=>{installEvent=null;button.textContent='✓ Application installée';button.disabled=true;showToast('Application installée avec succès')});
+          button.onclick=async()=>{if(installEvent){installEvent.prompt();await installEvent.userChoice;installEvent=null}else alert('Pour installer : ouvrez le menu du navigateur puis choisissez « Installer l’application » ou « Ajouter à l’écran d’accueil ».')};
+          const target=window.__SERVER_USER__?document.querySelector('aside'):document.querySelector('#loginScreen>div');if(target)target.appendChild(button);
+        }
+        setupPwaInstall();
         if(window.__SERVER_USER__){
           document.querySelector('#loginScreen').style.display='none';
           const selector=document.querySelector('#currentUser');
