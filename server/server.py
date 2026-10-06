@@ -56,7 +56,7 @@ ROLE_PERMISSIONS = {
 }
 
 ROLE_STATE_KEYS = {
-    "Réceptionniste": {"rooms", "selected", "alerted", "history", "exchangeRate", "reservations", "documentCounters", "analyticEntries"},
+    "Réceptionniste": {"rooms", "selected", "alerted", "history", "exchangeRate", "reservations", "documentCounters", "analyticEntries", "sales", "moves", "roomRevenueLog"},
     "Caissier": {"cart", "sales", "posSales", "moves", "closures", "openingCash", "expenses", "products", "stockMoves", "lastReceipt", "tables", "history", "exchangeRate", "documentCounters", "analyticEntries"},
     "Serveur": {"cart", "posSales", "moves", "products", "stockMoves", "lastReceipt", "tables", "rooms", "history", "analyticEntries"},
     "Barman": {"cart", "posSales", "moves", "products", "stockMoves", "lastReceipt", "tables", "history", "analyticEntries"},
@@ -111,7 +111,7 @@ def protect_state(state: dict) -> dict:
         for key in ("guest", "phone", "identity"):
             if key in reservation:
                 reservation[key] = encrypt_value(reservation[key])
-    for collection in ("history", "outstandingDebts"):
+    for collection in ("history", "outstandingDebts", "roomRevenueLog"):
         for entry in protected.get(collection, []):
             if "guest" in entry:
                 entry["guest"] = encrypt_value(entry["guest"])
@@ -128,7 +128,7 @@ def unprotect_state(state: dict) -> dict:
         for key in ("guest", "phone", "identity"):
             if key in reservation:
                 reservation[key] = decrypt_value(reservation[key])
-    for collection in ("history", "outstandingDebts"):
+    for collection in ("history", "outstandingDebts", "roomRevenueLog"):
         for entry in visible.get(collection, []):
             if "guest" in entry:
                 entry["guest"] = decrypt_value(entry["guest"])
@@ -178,6 +178,7 @@ def initial_state() -> dict:
         "reservations": [],
         "documentCounters": {"invoice": 0, "ticket": 0},
         "outstandingDebts": [],
+        "roomRevenueLog": [],
         "analyticEntries": [],
         "analyticCenters": ["Hôtel", "Bar", "Restaurant", "Cuisine", "Administration"],
     }
@@ -634,6 +635,29 @@ class Handler(BaseHTTPRequestHandler):
         window.removeFolioLine=async function(index){if(!await requestDirectorApproval('annulation','Suppression ligne folio'))return;return originalRemoveFolioLine(index)};
         const originalDeleteArticle=window.deleteArticle;
         window.deleteArticle=async function(id){if(!await requestDirectorApproval('suppression','Suppression article '+id))return;return originalDeleteArticle(id)};
+        function roomRevenueRows(){
+          const selected=document.querySelector('#roomRevenueDate')?.value||'';
+          return (state.roomRevenueLog||[]).filter(entry=>!selected||(entry.occurredAt||'').slice(0,10)===selected).slice().sort((a,b)=>(b.occurredAt||'').localeCompare(a.occurredAt||''));
+        }
+        function renderRoomRevenueJournal(){
+          const body=document.querySelector('#roomRevenueBody'),total=document.querySelector('#roomRevenueTotal');if(!body||!total)return;
+          const rows=roomRevenueRows();total.textContent=money(rows.reduce((sum,entry)=>sum+Number(entry.amount||0),0));
+          body.innerHTML=rows.length?rows.map(entry=>`<tr><td>${entry.date||''}<br><small class="muted">${entry.time||''}</small></td><td>Chambre ${entry.room}</td><td>${entry.guest||'Client'}</td><td>${entry.stay||''}</td><td><b>${entry.amount<0?'− ':''}${money(Math.abs(entry.amount||0))}</b><br><small>${entry.raw||Math.abs(entry.amount||0)} ${entry.currency||'CDF'}</small></td><td>${entry.cashier||''}<br><small class="muted">${entry.kind||''}</small></td></tr>`).join(''):'<tr><td colspan="6" class="muted">Aucun encaissement de chambre pour cette date.</td></tr>';
+        }
+        function printRoomRevenueJournal(){
+          const rows=roomRevenueRows(),selected=document.querySelector('#roomRevenueDate')?.value||'Toutes les dates',total=rows.reduce((sum,entry)=>sum+Number(entry.amount||0),0),body=rows.map(entry=>`<div class="folio-line"><span>${entry.date||''} ${entry.time||''} · Chambre ${entry.room}<br><small>${entry.guest||'Client'} · ${entry.stay||''} · ${entry.cashier||''}</small></span><b>${entry.amount<0?'− ':''}${money(Math.abs(entry.amount||0))}</b></div>`).join('')||'<p>Aucun encaissement.</p>';
+          showPrintPreview('a4','JOURNAL DES RECETTES CHAMBRES',`Période : ${selected}<hr>${body}`,total,'TOTAL ENCAISSÉ','JRC-'+new Date().toISOString().slice(0,10).replaceAll('-',''));
+        }
+        function createRoomRevenueJournalUI(){
+          state.roomRevenueLog=state.roomRevenueLog||[];const hotel=document.querySelector('#hotel');if(!hotel||document.querySelector('#roomRevenueJournal'))return;
+          const panel=document.createElement('div');panel.id='roomRevenueJournal';panel.className='panel';panel.style.marginTop='17px';panel.innerHTML=`<div class="toolbar"><div><h2 style="margin-bottom:4px">Journal des recettes chambres</h2><span class="muted">Les encaissements restent visibles après le check-out.</span></div><div><input id="roomRevenueDate" type="date" value="${new Date().toISOString().slice(0,10)}" onchange="renderRoomRevenueJournal()" style="padding:9px;border:1px solid var(--line);border-radius:8px"> <button class="btn ghost" onclick="document.querySelector('#roomRevenueDate').value='';renderRoomRevenueJournal()">Toutes les dates</button> <button class="btn primary" onclick="printRoomRevenueJournal()">Imprimer</button></div></div><div style="overflow-x:auto"><table><thead><tr><th>Date et heure</th><th>Chambre</th><th>Client</th><th>Séjour</th><th>Montant payé</th><th>Caissier</th></tr></thead><tbody id="roomRevenueBody"></tbody></table></div><div class="total"><span>Total affiché</span><b id="roomRevenueTotal">0 CDF</b></div>`;hotel.appendChild(panel);renderRoomRevenueJournal();
+        }
+        const originalPayRoomForJournal=window.payRoom;
+        window.payRoom=function(){
+          const room=state.rooms[state.selected-1],before=Number(state.sales||0),raw=Number(document.querySelector('#partialAmount').value||0),currency=document.querySelector('#paymentCurrency').value,kind=document.querySelector('#paymentKind').value,now=new Date(),guest=room?.guest||'Client',stay=room?.type==='passage'?'Passage 2 h 30':'Nuitée',roomId=room?.id;
+          originalPayRoomForJournal();const delta=Number(state.sales||0)-before;if(!delta)return;
+          state.roomRevenueLog=state.roomRevenueLog||[];state.roomRevenueLog.push({id:Date.now(),occurredAt:now.toISOString(),date:now.toLocaleDateString('fr-FR'),time:now.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}),room:roomId,guest,stay,amount:delta,raw,currency,kind,cashier:activeUser().name});persist();renderRoomRevenueJournal();
+        };
         function applyServerRights(){
           const allowed=new Set(window.__SERVER_USER__.permissions||[]);
           const map={'Tableau de bord':'dashboard','Chambres':'rooms','Point de vente':'pos','Articles':'articles','Stock':'stock','Caisse commune':'cash','Utilisateurs':'users'};
@@ -695,7 +719,7 @@ class Handler(BaseHTTPRequestHandler):
             Object.keys(state).forEach(key=>{if(key!=='catalog')delete state[key]});
             Object.entries(fresh).forEach(([key,value])=>{if(key!=='catalog')state[key]=value});
             state.catalog=catalog;window.__STATE_VERSION__=data.version;
-            render();renderTargetOptions();renderProducts();renderCart();renderStock();renderArticles();renderTables();renderDashboard();renderClosure();renderCalendar();
+            render();renderTargetOptions();renderProducts();renderCart();renderStock();renderArticles();renderTables();renderDashboard();renderClosure();renderCalendar();renderRoomRevenueJournal();
           }catch(e){}
         }
         function startLiveSync(){setInterval(syncFromServer,4000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncFromServer()})}
@@ -737,7 +761,7 @@ class Handler(BaseHTTPRequestHandler):
           }else{
             logout.classList.add('account-action');password.classList.add('account-action');logout.style.marginTop='10px';aside.appendChild(logout);aside.appendChild(password);
           }
-          applyServerRights();createCalendarUI();startIdleLogout();startLiveSync();
+          applyServerRights();createCalendarUI();createRoomRevenueJournalUI();startIdleLogout();startLiveSync();
         }
         </script>
         """
@@ -988,7 +1012,7 @@ class Handler(BaseHTTPRequestHandler):
             if not state["rooms"]:
                 state["rooms"] = [{"id": i, "status": "free"} for i in range(1, 13)]
             state["tables"] = [False] * max(10, len(state.get("tables", [])))
-            reset_values = {"sales": 0, "moves": [], "selected": 1, "cart": [], "posSales": 0, "expenses": 0, "openingCash": 0, "closures": [], "stockMoves": [], "history": [], "alerted": {}, "reservations": [], "documentCounters": {"invoice": 0, "ticket": 0}, "outstandingDebts": [], "analyticEntries": []}
+            reset_values = {"sales": 0, "moves": [], "selected": 1, "cart": [], "posSales": 0, "expenses": 0, "openingCash": 0, "closures": [], "stockMoves": [], "history": [], "alerted": {}, "reservations": [], "documentCounters": {"invoice": 0, "ticket": 0}, "outstandingDebts": [], "roomRevenueLog": [], "analyticEntries": []}
             state.update(reset_values)
             state.pop("lastReceipt", None)
             conn.execute("UPDATE app_state SET state_json=?,version=?,updated_at=?,updated_by=? WHERE id=1", (json.dumps(protect_state(state), ensure_ascii=False, separators=(",", ":")), row["version"] + 1, utc_now(), session["user_id"]))
